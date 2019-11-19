@@ -5,18 +5,21 @@ export sqp
 
 
 using LinearAlgebra
+using LinearOperators
 using Krylov
 using NLPModels
 using SolverTools
 using JSOSolvers
+using SparseArrays
 
+include("SPQR.jl")
 
 function sqp(nlp :: AbstractNLPModel;
              atol :: Real = 1e-8,
              rtol :: Real = 1e-8,
              max_eval :: Int = -1,
              cons_tol :: Real = 1e-8,
-             max_iter :: Int = 1000,
+             max_iter :: Int = -1,
              max_time :: Float64 = 30.0,
              relax_param :: Float64 = 0.8,
              trust_region_radius :: Float64 = 3.0,
@@ -44,9 +47,11 @@ function sqp(nlp :: AbstractNLPModel;
     fx = obj(nlp, x)
     cx = cons(nlp, x) - nlp.meta.ucon
     gx = grad(nlp, x)
-    A = jac(nlp, x)
-    W = Symmetric(hess(nlp, x, y = y), :L)
-    Z = nullspace(Matrix(A))
+    A = jac_op(nlp, x)
+    W = hess_op(nlp, x, y = y)
+    At = sparse(Matrix(transpose(A)))
+    rank, Q, R, pr, Pc = SPQR.spqr(At)
+    Z = LinearOperator(Q[:,n-rank:n])
     norm_cx = norm(cx)
     ρ = 0.0
     μ = μ0
@@ -64,11 +69,11 @@ function sqp(nlp :: AbstractNLPModel;
         exitflag = :first_order
     end
     Δt = time() - start_time
-    tired = Δt > max_time || iter > max_iter || neval_obj(nlp) > max_eval > 0
+    tired = Δt > max_time || iter > max_iter > 0 || neval_obj(nlp) > max_eval > 0
     if tired
          if Δt > max_time
             exitflag = :max_time
-        elseif iter > max_iter
+        elseif iter > max_iter > 0
             exitflag = :max_iter
         else
             exitflag = :max_eval
@@ -113,11 +118,13 @@ function sqp(nlp :: AbstractNLPModel;
             if norm_cx <= 1e-2
                 relax_param = 0.2
             end
-            A = jac(nlp, x)
+            A = jac_op(nlp, x)
             gx = grad(nlp, x)
             y = lsmr(A', gx)[1]
-            W = Symmetric(hess(nlp, x, y = y), :L)
-            Z = nullspace(Matrix(A))
+            W = hess_op(nlp, x, y = y)
+            At = sparse(Matrix(transpose(A)))
+            rank, Q, R, pr, Pc = SPQR.spqr(At)
+            Z = LinearOperator(Q[:,n-rank:n])
             last_but_one_rejected = last_rejected
             last_rejected = false
             last_accepted_μ = μ
@@ -139,11 +146,11 @@ function sqp(nlp :: AbstractNLPModel;
         end
         Δt = time() - start_time
         iter += 1
-        tired = Δt > max_time || iter > max_iter || neval_obj(nlp) > max_eval > 0
+        tired = Δt > max_time || iter > max_iter > 0 || neval_obj(nlp) > max_eval > 0
         if tired
             if Δt > max_time
                 exitflag = :max_time
-            elseif iter > max_iter
+            elseif iter > max_iter > 0
                 exitflag = :max_iter
             else
                 exitflag = :max_eval
